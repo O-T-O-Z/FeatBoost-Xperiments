@@ -2,6 +2,7 @@ import json
 
 import numpy as np
 import pandas as pd
+from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import KFold
 from tqdm import tqdm
 from xgboost import XGBRegressor
@@ -51,7 +52,7 @@ def run_cross_validation(
                 features, importances = func(
                     X_train[train_index],
                     y_train[train_index],
-                    XGBRegressor(**xgb_params),
+                    [XGBRegressor(**xgb_params), LinearRegression()],
                 )
             elif func == train_mrmr:
                 features, importances = func(
@@ -109,6 +110,15 @@ def run_experiment(dataset_name: str, X: np.ndarray, y: np.ndarray) -> None:
             feature_selectors,
             t_rand,
         )
+
+    for selector, results in feature_selectors.items():
+        lengths = [len(lst) for lst in results]
+        mode = max(set(lengths), key=lengths.count)
+        equal_or_greater_than_mode = [
+            lst if len(lst) >= mode else [] for lst in results
+        ]
+        trimmed = [lst[:mode] for lst in equal_or_greater_than_mode]
+        feature_selectors[selector] = trimmed
 
 
 if __name__ == "__main__":

@@ -169,4 +169,4 @@ raw_datasets/
 plots*
 plot_feature_selection.ipynb
 survival_results/
-regression_results/
+regression_experiments/
