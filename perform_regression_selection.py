@@ -120,6 +120,9 @@ def run_experiment(dataset_name: str, X: np.ndarray, y: np.ndarray) -> None:
         trimmed = [lst[:mode] for lst in equal_or_greater_than_mode]
         feature_selectors[selector] = trimmed
 
+    with open(f"regression_features/{dataset_name}_features_selected.json", "w") as f:
+        json.dump(feature_selectors, f)
+
 
 if __name__ == "__main__":
     for dataset in ["crime", "diabetes", "housing", "parkinsons", "msd"]:

@@ -110,6 +110,18 @@ def run_experiment(dataset_name: str, X: np.ndarray, y: np.ndarray) -> None:
             xgb_params_train,
         )
 
+    for selector, results in feature_selectors.items():
+        lengths = [len(lst) for lst in results]
+        mode = max(set(lengths), key=lengths.count)
+        equal_or_greater_than_mode = [
+            lst if len(lst) >= mode else [] for lst in results
+        ]
+        trimmed = [lst[:mode] for lst in equal_or_greater_than_mode]
+        feature_selectors[selector] = trimmed
+
+    with open(f"survival_features/{dataset_name}_features_selected.json", "w") as f:
+        json.dump(feature_selectors, f)
+
 
 if __name__ == "__main__":
     for dataset in ["metabric", "nacd", "nhanes", "support"]:
