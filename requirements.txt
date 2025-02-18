@@ -14,4 +14,5 @@ Boruta==0.3
 skrebate==0.62
 torch==2.4.1
 seaborn==0.13.2
-git+ssh://git@github.com/O-T-O-Z/FeatBoost-X.git@v0.1.1
+# git+ssh://git@github.com/O-T-O-Z/FeatBoost-X.git@v0.1.1
+scipy==1.13

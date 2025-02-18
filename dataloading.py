@@ -160,6 +160,44 @@ def prepare_msd() -> None:
     df.sample(10000, random_state=42).to_csv("datasets/msd_cleaned.csv", index=False)
 
 
+def prepare_tcga() -> None:
+    """Prepare the TCGA dataset."""
+    df = pd.read_csv("raw_datasets/Combined Study Clinical Data.tsv", sep="\t")
+    # drop all columns with more than 90% missing values
+    df = df.dropna(thresh=0.9 * len(df), axis=1)
+    genome_df = pd.read_csv("raw_datasets/Combined Study Segments.seg", sep="\t")
+    genome_df.columns = ["ID", "chrom", "loc.start", "loc.end", "num.mark", "seg.mean"]
+    genome_df["Region"] = (
+        genome_df["chrom"].astype(str)
+        + ":"
+        + genome_df["loc.start"].astype(str)
+        + "-"
+        + genome_df["loc.end"].astype(str)
+    )
+    wide_df = genome_df.pivot(index="ID", columns="Region", values="seg.mean").fillna(
+        0
+    )  # Fill NaNs with 0
+    end_df = (
+        wide_df.merge(
+            df[["Sample ID", "Overall Survival (Months)", "Overall Survival Status"]],
+            left_index=True,
+            right_on="Sample ID",
+        )
+        .drop(columns="Sample ID")
+        .dropna(subset=["Overall Survival (Months)", "Overall Survival Status"])
+    )
+
+    end_df.loc[:, "lower_bound"] = end_df["Overall Survival (Months)"].astype(float)
+    end_df.loc[:, "upper_bound"] = end_df["Overall Survival (Months)"].astype(float)
+    end_df.loc[
+        end_df["Overall Survival Status"] == "1:DECEASED", "upper_bound"
+    ] = np.inf
+    end_df = end_df.drop(
+        ["Overall Survival (Months)", "Overall Survival Status"], axis=1
+    )
+    end_df.to_csv("datasets/tcga_cleaned.csv", index=False)
+
+
 def load_regression_dataset(name: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Load a regression dataset from the datasets folder.

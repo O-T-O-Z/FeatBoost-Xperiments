@@ -40,14 +40,18 @@ def run_cross_validation(
         "random_state": t_rand,
     }
     folds = KFold(n_splits=10, shuffle=True, random_state=42)
-    for train_index, _ in tqdm(folds.split(X), total=10):  # type: ignore
-        for selector, func in [
+    if list(feature_selectors.keys()) == ["FeatBoost-X"]:
+        funcs = [("FeatBoost-X", train_featboost)]
+    else:
+        funcs = [
             ("RReliefF", train_relief),
             ("Boruta", train_boruta),
             ("XGBoost", train_xgb),
             ("FeatBoost-X", train_featboost),
             ("MRMR", train_mrmr),
-        ]:
+        ]
+    for train_index, _ in tqdm(folds.split(X), total=10):  # type: ignore
+        for selector, func in funcs:
             if func == train_featboost:
                 features, importances = func(
                     X_train[train_index],
@@ -88,7 +92,9 @@ def run_cross_validation(
                 json.dump(feature_selectors, f)
 
 
-def run_experiment(dataset_name: str, X: np.ndarray, y: np.ndarray) -> None:
+def run_experiment(
+    dataset_name: str, X: np.ndarray, y: np.ndarray, only_featboost: bool = False
+) -> None:
     """
     Run the experiment for the given dataset.
 
@@ -99,9 +105,12 @@ def run_experiment(dataset_name: str, X: np.ndarray, y: np.ndarray) -> None:
     print(f"Running experiment {dataset_name}")
     X_train = np.array(X)
     y_train = np.array(y)
-    feature_selectors = {
-        k: [] for k in ["Boruta", "FeatBoost-X", "RReliefF", "XGBoost", "MRMR"]
-    }
+    if only_featboost:
+        feature_selectors = {"FeatBoost-X": []}
+    else:
+        feature_selectors = {
+            k: [] for k in ["Boruta", "FeatBoost-X", "RReliefF", "XGBoost", "MRMR"]
+        }
     for t_rand, _ in tqdm([(42, 84), (55, 110), (875, 1750)]):
         run_cross_validation(
             X_train,
@@ -127,4 +136,4 @@ def run_experiment(dataset_name: str, X: np.ndarray, y: np.ndarray) -> None:
 if __name__ == "__main__":
     for dataset in ["crime", "diabetes", "housing", "parkinsons", "msd"]:
         X, y = load_regression_dataset(dataset)
-        run_experiment(dataset, X.values, y.values)
+        run_experiment(dataset, X.values, y.values, only_featboost=True)

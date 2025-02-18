@@ -57,7 +57,7 @@ repos:
             "--max-line-length",
             "120",
             "--extend-ignore",
-            "D100, SC200, SC100, VNE001, N803, ANN101, ANN003, N806, E203",
+            "D100, SC200, SC100, VNE001, N803, ANN101, ANN003, N806, E203, BLK100",
             "--exclude",
             "__init__.py, test_*.py",
             "--max-cognitive-complexity",
