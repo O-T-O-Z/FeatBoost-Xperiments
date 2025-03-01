@@ -2,14 +2,135 @@ import numpy as np
 import pandas as pd
 from boruta import BorutaPy
 from featboostx import FeatBoostRegressor
+from lifelines import CoxPHFitter
 from lifelines.utils import concordance_index
 from mrmr import mrmr_regression
+from sklearn.feature_selection import f_regression
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error
 from skrebate import ReliefF
 from xgboost import XGBRegressor
 
 pd.options.mode.chained_assignment = None
+
+
+def train_pvalue_survival(X, y, clf):
+    df = pd.DataFrame(X, columns=[i for i in range(0, X.shape[1])])
+    df["time"] = y[:, 0]
+    df["event"] = (y[:, 0] == y[:, 1]).astype(int)
+    features = df.columns[:-2]
+    significant_features = []
+
+    for feature in features:
+        cph = CoxPHFitter()
+        cph.fit(
+            df[[feature, "time", "event"]],
+            duration_col="time",
+            event_col="event",
+        )
+        p_value = cph.summary.loc[feature, "p"]
+        if p_value < 0.05:
+            significant_features.append((feature, p_value))
+
+    significant_features.sort(key=lambda x: x[1])
+    size = max(100, len(significant_features))
+    return [x[0] for x in significant_features[:100]], np.array(
+        [1 / size for _ in range(size)]
+    )
+
+
+def train_pvalue(X, y, clf):
+    _, p_values = f_regression(X, y)
+
+    # sort p-values
+    p_values = pd.Series(
+        p_values, index=[i for i in range(0, X.shape[1])]
+    ).sort_values()
+
+    significant_features = p_values[p_values < 0.05].index.tolist()
+    size = max(100, len(significant_features))
+    return significant_features[:100], np.array([1 / size for _ in range(size)])
+
+
+def train_forward_selection(X, y, clf):
+    df = pd.DataFrame(X, columns=[i for i in range(0, X.shape[1])])
+    if clf == "surv":
+        df["time"] = y[:, 0]
+        df["event"] = (y[:, 0] == y[:, 1]).astype(int)
+    selected_features = []
+    remaining_features = list(df.columns.difference(["time", "event"]))
+    best_criterion = np.inf  # Use AIC or BIC (lower is better)
+    # Forward selection loop
+    while remaining_features:
+        best_feature = None
+        for feature in remaining_features:
+            candidate_features = selected_features + [feature]
+            if clf == "surv":
+                cph = CoxPHFitter(penalizer=0.0001)
+                cph.fit(
+                    df[["time", "event"] + candidate_features],
+                    duration_col="time",
+                    event_col="event",
+                )
+                current_criterion = cph.AIC_partial_  # or cph.BIC_partial_
+            elif clf == "reg":
+                model = LinearRegression().fit(X[:, candidate_features], y)
+                current_criterion = mean_absolute_error(
+                    y, model.predict(X[:, candidate_features])
+                )
+            if current_criterion < best_criterion:
+                best_criterion = current_criterion
+                best_feature = feature
+        if best_feature is not None:
+            selected_features.append(best_feature)
+            remaining_features.remove(best_feature)
+        else:
+            break
+
+    selected_features = selected_features[:100]
+    size = max(100, len(selected_features))
+    return selected_features, np.array([1 / size for _ in range(size)])
+
+
+def train_backward_selection(X, y, clf):
+    df = pd.DataFrame(X, columns=[i for i in range(0, X.shape[1])])
+    if clf == "surv":
+        df["time"] = y[:, 0]
+        df["event"] = (y[:, 0] == y[:, 1]).astype(int)
+    remaining_features = list(df.columns.difference(["time", "event"]))
+    best_criterion = np.inf  # Use AIC or BIC (lower is better)
+
+    # Backward selection loop
+    while remaining_features:
+        worst_feature = None
+        for feature in remaining_features:
+            candidate_features = [f for f in remaining_features if f != feature]
+            if clf == "surv":
+                cph = CoxPHFitter(penalizer=0.0001)
+                cph.fit(
+                    df[["time", "event"] + candidate_features],
+                    duration_col="time",
+                    event_col="event",
+                )
+                current_criterion = cph.AIC_partial_  # or cph.BIC_partial_
+            elif clf == "reg":
+                model = LinearRegression().fit(X[:, candidate_features], y)
+                current_criterion = mean_absolute_error(
+                    y, model.predict(X[:, candidate_features])
+                )
+
+            if current_criterion < best_criterion:
+                best_criterion = current_criterion
+                worst_feature = feature
+
+        if worst_feature is not None:
+            remaining_features.remove(worst_feature)
+        else:
+            break
+
+    remaining_features = remaining_features[:100]
+    size = max(100, len(remaining_features))
+    return remaining_features, np.array([1 / size for _ in range(size)])
 
 
 def train_boruta(X, y, clf):
@@ -95,6 +216,8 @@ def train_featboost(
         siso_order=1,
         num_resets=1,
         epsilon=1e-10,
+        use_shap=False,
+        corr_check=False,
     )
     feature_selector.fit(X, y)
     return feature_selector.selected_subset_, np.array(

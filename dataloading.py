@@ -3,7 +3,7 @@ import pandas as pd
 from pycox.datasets import metabric
 from shap.datasets import nhanesi
 from sklearn.datasets import fetch_california_housing, load_diabetes
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import OneHotEncoder
 from ucimlrepo import fetch_ucirepo
 
 pd.set_option("future.no_silent_downcasting", True)
@@ -59,7 +59,13 @@ def prepare_support() -> None:
         .drop(TO_DROP, axis=1)
         .fillna(value=FILL_VALUES)
     )
-    df = pd.get_dummies(df, dummy_na=True)
+    enc = OneHotEncoder(drop="if_binary", sparse_output=False).set_output(
+        transform="pandas"
+    )
+    object_columns = df.drop(df.select_dtypes(exclude="object").columns, axis=1)
+    df.drop(object_columns.columns, axis=1, inplace=True)
+    df = pd.concat([df, enc.fit_transform(object_columns)], axis=1)
+
     df = df.fillna(df.median())
     X_support = df.drop(["death", "d.time"], axis=1)
     X_support = X_support.replace(True, 1).replace(False, 0)
@@ -108,6 +114,129 @@ def prepare_metabric() -> None:
     df.to_csv("datasets/metabric_cleaned.csv", index=False)
 
 
+def prepare_metabric_full() -> None:
+    """Prepare the METABRIC dataset with all gene expression data."""
+    df = pd.read_csv(
+        "raw_datasets/METABRIC_RNA_Mutation.csv"
+    )  # from https://www.kaggle.com/datasets/raghadalharbi/breast-cancer-gene-expression-profiles-metabric
+    drop_columns = [
+        "patient_id",
+        # "age_at_diagnosis",
+        "type_of_breast_surgery",
+        "cancer_type",
+        "cancer_type_detailed",
+        "cellularity",
+        # "chemotherapy",
+        "cohort",
+        "pam50_+_claudin-low_subtype",
+        "er_status_measured_by_ihc",
+        # "er_status",
+        "neoplasm_histologic_grade",
+        "her2_status_measured_by_snp6",
+        "her2_status",
+        "tumor_other_histologic_subtype",
+        # "hormone_therapy",
+        "inferred_menopausal_state",
+        "integrative_cluster",
+        "primary_tumor_laterality",
+        "lymph_nodes_examined_positive",
+        "mutation_count",
+        "nottingham_prognostic_index",
+        "oncotree_code",
+        "pr_status",
+        # "radio_therapy",
+        "tumor_size",
+        "tumor_stage",
+        "death_from_cancer",
+        "3-gene_classifier_subtype",
+        "siah1_mut",  # highly correlated with outcome
+    ]
+    df = df.drop(columns=drop_columns)
+    X = df.drop(columns=["overall_survival_months", "overall_survival"])
+    X["er_status"] = X["er_status"].map({"Positive": 1, "Negative": 0}).astype(str)
+
+    enc = OneHotEncoder(drop="if_binary", sparse_output=False).set_output(
+        transform="pandas"
+    )
+    object_columns = df.drop(df.select_dtypes(exclude="object").columns, axis=1).astype(
+        str
+    )
+    df.drop(object_columns.columns, axis=1, inplace=True)
+    df = pd.concat([df, enc.fit_transform(object_columns)], axis=1)
+
+    y = df[["overall_survival_months", "overall_survival"]]
+    y = y.copy()
+    y["lower_bound"] = y["overall_survival_months"]
+    y["upper_bound"] = y["overall_survival_months"]
+    y.loc[y["overall_survival"] == 1, "upper_bound"] = np.inf
+    y = y.drop(columns=["overall_survival_months", "overall_survival"])
+    df = pd.concat([X, y], axis=1)
+    df.to_csv("datasets/metabric_full_cleaned.csv", index=False)
+
+
+def prepare_metabric_regression() -> None:
+    """Prepare the METABRIC dataset for regression."""
+    df = pd.read_csv(
+        "raw_datasets/METABRIC_RNA_Mutation.csv"
+    )  # from https://www.kaggle.com/datasets/raghadalharbi/breast-cancer-gene-expression-profiles-metabric
+    drop_columns = [
+        "patient_id",
+        # "age_at_diagnosis",
+        "type_of_breast_surgery",
+        "cancer_type",
+        "cancer_type_detailed",
+        "cellularity",
+        # "chemotherapy",
+        "cohort",
+        "pam50_+_claudin-low_subtype",
+        "er_status_measured_by_ihc",
+        # "er_status",
+        "neoplasm_histologic_grade",
+        "her2_status_measured_by_snp6",
+        "her2_status",
+        "tumor_other_histologic_subtype",
+        # "hormone_therapy",
+        "inferred_menopausal_state",
+        "integrative_cluster",
+        "primary_tumor_laterality",
+        "lymph_nodes_examined_positive",
+        "mutation_count",
+        "oncotree_code",
+        "pr_status",
+        # "radio_therapy",
+        "tumor_size",
+        "tumor_stage",
+        "death_from_cancer",
+        "3-gene_classifier_subtype",
+        "overall_survival_months",
+        "overall_survival",
+    ]
+    df = df.drop(columns=drop_columns)
+    X = df.drop(columns=["nottingham_prognostic_index"])
+    X["er_status"] = X["er_status"].map({"Positive": 1, "Negative": 0}).astype(str)
+
+    enc = OneHotEncoder(drop="if_binary", sparse_output=False).set_output(
+        transform="pandas"
+    )
+    object_columns = df.drop(df.select_dtypes(exclude="object").columns, axis=1).astype(
+        str
+    )
+    df.drop(object_columns.columns, axis=1, inplace=True)
+    df = pd.concat([df, enc.fit_transform(object_columns)], axis=1)
+    y = df["nottingham_prognostic_index"]
+    df = pd.concat([X, y], axis=1)
+    df.to_csv("datasets/metabric_regression_cleaned.csv", index=False)
+
+
+def prepare_eyedata() -> None:
+    """Prepare the eye data dataset."""
+    df = pd.read_csv("raw_datasets/eyedata.csv")
+    X = df.drop(columns=["trim32", "Unnamed: 0"])
+    y = df["trim32"]
+    df = pd.concat([X, y], axis=1)
+    df.to_csv("datasets/eyedata_cleaned.csv", index=False)
+
+
 def prepare_diabetes() -> None:
     """Prepare the diabetes dataset."""
     data = load_diabetes()
@@ -131,7 +260,14 @@ def prepare_crime() -> None:
     communities_and_crime_unnormalized = fetch_ucirepo(id=211)
     X = communities_and_crime_unnormalized.data.features  # type: ignore
     y = communities_and_crime_unnormalized.data.targets  # type: ignore
-    X.loc[:, "State"] = LabelEncoder().fit_transform(X["State"])
+
+    enc = OneHotEncoder(drop="if_binary", sparse_output=False).set_output(
+        transform="pandas"
+    )
+    object_columns = X.drop(X.select_dtypes(exclude="object").columns, axis=1)
+    X.drop(object_columns.columns, axis=1, inplace=True)
+    X = pd.concat([X, enc.fit_transform(object_columns)], axis=1)
+
     X = X.astype(float)
     X = X.fillna(X.median())
     y = y["violentPerPop"]
@@ -160,44 +296,6 @@ def prepare_msd() -> None:
     df.sample(10000, random_state=42).to_csv("datasets/msd_cleaned.csv", index=False)
 
 
-def prepare_tcga() -> None:
-    """Prepare the TCGA dataset."""
-    df = pd.read_csv("raw_datasets/Combined Study Clinical Data.tsv", sep="\t")
-    # drop all columns with more than 90% missing values
-    df = df.dropna(thresh=0.9 * len(df), axis=1)
-    genome_df = pd.read_csv("raw_datasets/Combined Study Segments.seg", sep="\t")
-    genome_df.columns = ["ID", "chrom", "loc.start", "loc.end", "num.mark", "seg.mean"]
-    genome_df["Region"] = (
-        genome_df["chrom"].astype(str)
-        + ":"
-        + genome_df["loc.start"].astype(str)
-        + "-"
-        + genome_df["loc.end"].astype(str)
-    )
-    wide_df = genome_df.pivot(index="ID", columns="Region", values="seg.mean").fillna(
-        0
-    )  # Fill NaNs with 0
-    end_df = (
-        wide_df.merge(
-            df[["Sample ID", "Overall Survival (Months)", "Overall Survival Status"]],
-            left_index=True,
-            right_on="Sample ID",
-        )
-        .drop(columns="Sample ID")
-        .dropna(subset=["Overall Survival (Months)", "Overall Survival Status"])
-    )
-
-    end_df.loc[:, "lower_bound"] = end_df["Overall Survival (Months)"].astype(float)
-    end_df.loc[:, "upper_bound"] = end_df["Overall Survival (Months)"].astype(float)
-    end_df.loc[
-        end_df["Overall Survival Status"] == "1:DECEASED", "upper_bound"
-    ] = np.inf
-    end_df = end_df.drop(
-        ["Overall Survival (Months)", "Overall Survival Status"], axis=1
-    )
-    end_df.to_csv("datasets/tcga_cleaned.csv", index=False)
-
-
 def load_regression_dataset(name: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Load a regression dataset from the datasets folder.
@@ -216,6 +314,10 @@ def load_regression_dataset(name: str) -> tuple[pd.DataFrame, pd.DataFrame]:
         target = "0"
     elif name == "parkinsons":
         target = "total_UPDRS"
+    elif name == "metabric_regression":
+        target = "nottingham_prognostic_index"
+    elif name == "eyedata":
+        target = "trim32"
 
     X = df.drop(target, axis=1)
     y = df[[target]]
