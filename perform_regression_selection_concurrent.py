@@ -1,8 +1,11 @@
 import argparse
+import concurrent.futures
 import json
+import threading
 
 import numpy as np
 import pandas as pd
+from lifelines.exceptions import ConvergenceError
 from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import KFold
 from tqdm import tqdm
@@ -22,6 +25,63 @@ from test_utils import (
 )
 
 FILE_NAME = "_features_selected"
+
+
+def worker(args: list) -> list:
+    """
+    Worker function to run the feature selection algorithms.
+
+    :param args: list of arguments.
+    :return: list of results.
+    """
+    eval_params = {
+        "learning_rate": 0.01,
+        "max_depth": 4,
+    }
+    fold_idx, train_index, selector, func, xgb_params, X_train, y_train = args
+    if func in [train_shapboost, train_shapboost_c]:
+        if selector == "SHAPBoost (XGB)":
+            eval_model = XGBRegressor(**eval_params)
+        else:
+            eval_model = LinearRegression()
+        features, importances = func(
+            X_train[train_index],
+            y_train[train_index],
+            [XGBRegressor(**xgb_params), eval_model],
+        )
+    elif func == train_mrmr:
+        features, importances = func(
+            pd.DataFrame(X_train[train_index]),
+            pd.DataFrame(y_train[train_index]),
+            XGBRegressor(**xgb_params),
+        )
+    elif func in [train_forward_selection, train_backward_selection]:
+        features, importances = func(
+            pd.DataFrame(X_train[train_index]),
+            pd.DataFrame(y_train[train_index]),
+            "reg",
+        )
+    else:
+        features, importances = func(
+            X_train[train_index],
+            y_train[train_index],
+            XGBRegressor(**xgb_params),
+        )
+    if np.unique(importances).shape[0] != 1:
+        # use the mean value of the scores as a lower threshold.
+        most_important_ = np.where(importances >= np.mean(importances))[0]
+        features = features[: len(most_important_)]
+        # get importance of those features
+        importances = importances[: len(most_important_)]
+
+    # limit the number of features to 100
+    if len(features) > 100:
+        features = features[:100]
+        importances = importances[:100]
+
+    importances = [float(i) for i in list(importances)]
+    features = [int(f) for f in list(features)]
+    return (fold_idx, selector, func, features, importances)
 
 
 def run_cross_validation(
@@ -57,63 +117,40 @@ def run_cross_validation(
         ("Forward", train_forward_selection),
         ("Backward", train_backward_selection),
         ("SHAPBoost-C", train_shapboost_c),
-        ("SHAPBoost", train_shapboost),
         ("SHAPBoost (XGB)", train_shapboost),
     ]
     funcs = [func for func in funcs if func[0] in feature_selectors]
+    # Precompute the fold splits with indices
+    folds_split = list(
+        enumerate(folds.split(X))
+    )  # (fold_idx, (train_index, test_index))
 
-    eval_params = {
-        "learning_rate": 0.01,
-        "max_depth": 4,
-    }
-    for train_index, _ in tqdm(folds.split(X), total=10):  # type: ignore
+    # Prepare all tasks: each task is a (fold_idx, train_index, selector, func)
+    tasks = []
+    for fold_idx, (train_index, _) in folds_split:
         for selector, func in funcs:
-            if func in [train_shapboost, train_shapboost_c]:
-                if selector == "SHAPBoost (XGB)":
-                    eval_model = XGBRegressor(**eval_params)
-                else:
-                    eval_model = LinearRegression()
-                features, importances = func(
-                    X_train[train_index],
-                    y_train[train_index],
-                    [XGBRegressor(**xgb_params), eval_model],
-                )
-            elif func == train_mrmr:
-                features, importances = func(
-                    pd.DataFrame(X_train[train_index]),
-                    pd.DataFrame(y_train[train_index]),
-                    XGBRegressor(**xgb_params),
-                )
-            elif func in [train_forward_selection, train_backward_selection]:
-                features, importances = func(
-                    pd.DataFrame(X_train[train_index]),
-                    pd.DataFrame(y_train[train_index]),
-                    "reg",
-                )
-            else:
-                features, importances = func(
-                    X_train[train_index],
-                    y_train[train_index],
-                    XGBRegressor(**xgb_params),
-                )
-
-            if np.unique(importances).shape[0] != 1:
-                # use the mean value of the scores as a lower threshold.
-                most_important_ = np.where(importances >= np.mean(importances))[0]
-                features = features[: len(most_important_)]
-                # get importance of those features
-                importances = importances[: len(most_important_)]
-
-            # limit the number of features to 100
-            if len(features) > 100:
-                features = features[:100]
-                importances = importances[:100]
-
-            importances = [float(i) for i in list(importances)]
-            features = [int(f) for f in list(features)]
-            feature_selectors[selector].append(features)
-            with open(f"regression_features/{dataset_name}{FILE_NAME}.json", "w") as f:
-                json.dump(feature_selectors, f)
+            tasks.append(
+                (fold_idx, train_index, selector, func, xgb_params, X_train, y_train)
+            )
+    dict_lock = threading.Lock()
+    # Process tasks in parallel with a ThreadPoolExecutor
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        futures = [executor.submit(worker, task) for task in tasks]
+        with tqdm(total=len(tasks)) as pbar:
+            for future in concurrent.futures.as_completed(futures):
+                print(future.result())
+                try:
+                    fold_idx, selector, func, features, _ = future.result()
+                    with dict_lock:
+                        feature_selectors[selector].append(features)
+                        print(f"Updated {selector} to {features}", flush=True)
+                    with open(
+                        f"regression_features/{dataset_name}{FILE_NAME}.json", "w"
+                    ) as f:
+                        json.dump(feature_selectors, f)
+                except ConvergenceError:
+                    print("FAILED")
+                pbar.update(1)
 
 
 def run_experiment(

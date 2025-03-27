@@ -9,6 +9,7 @@ from sklearn.feature_selection import f_regression
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error
 from skrebate import ReliefF
+from sksurv.ensemble import RandomSurvivalForest
 from xgboost import XGBRegressor
 
 pd.options.mode.chained_assignment = None
@@ -22,7 +23,7 @@ def train_pvalue_survival(X, y, clf):
     significant_features = []
 
     for feature in features:
-        cph = CoxPHFitter()
+        cph = CoxPHFitter(penalizer=0.1)
         cph.fit(
             df[[feature, "time", "event"]],
             duration_col="time",
@@ -66,7 +67,7 @@ def train_forward_selection(X, y, clf):
         for feature in remaining_features:
             candidate_features = selected_features + [feature]
             if clf == "surv":
-                cph = CoxPHFitter(penalizer=0.0001)
+                cph = CoxPHFitter(penalizer=0.1)
                 cph.fit(
                     df[["time", "event"] + candidate_features],
                     duration_col="time",
@@ -74,9 +75,9 @@ def train_forward_selection(X, y, clf):
                 )
                 current_criterion = cph.AIC_partial_  # or cph.BIC_partial_
             elif clf == "reg":
-                model = LinearRegression().fit(X[:, candidate_features], y)
+                model = LinearRegression().fit(df[candidate_features], y)
                 current_criterion = mean_absolute_error(
-                    y, model.predict(X[:, candidate_features])
+                    y, model.predict(df[candidate_features])
                 )
             if current_criterion < best_criterion:
                 best_criterion = current_criterion
@@ -106,7 +107,7 @@ def train_backward_selection(X, y, clf):
         for feature in remaining_features:
             candidate_features = [f for f in remaining_features if f != feature]
             if clf == "surv":
-                cph = CoxPHFitter(penalizer=0.0001)
+                cph = CoxPHFitter(penalizer=0.1)
                 cph.fit(
                     df[["time", "event"] + candidate_features],
                     duration_col="time",
@@ -114,9 +115,9 @@ def train_backward_selection(X, y, clf):
                 )
                 current_criterion = cph.AIC_partial_  # or cph.BIC_partial_
             elif clf == "reg":
-                model = LinearRegression().fit(X[:, candidate_features], y)
+                model = LinearRegression().fit(df[candidate_features], y)
                 current_criterion = mean_absolute_error(
-                    y, model.predict(X[:, candidate_features])
+                    y, model.predict(df[candidate_features])
                 )
 
             if current_criterion < best_criterion:
@@ -186,7 +187,7 @@ def train_boruta_survival(X, y, clf):
 def train_relief(X, y, placeholder=None):
     y = y.flatten()
     X = X.astype(np.float64)
-    clf = ReliefF(n_features_to_select=X.shape[1], n_neighbors=10, n_jobs=-1)
+    clf = ReliefF(n_features_to_select=X.shape[1], n_neighbors=10, n_jobs=1)
     clf.fit(X, y)
     imp_per_feat = [(k, v) for k, v in zip(range(X.shape[1]), clf.feature_importances_)]
     imp_per_feat = sorted(imp_per_feat, key=lambda x: x[1], reverse=True)
@@ -195,7 +196,7 @@ def train_relief(X, y, placeholder=None):
     return features, np.array(importances)
 
 
-def train_featboost(
+def train_shapboost(
     X,
     y,
     estimators=[
@@ -203,6 +204,9 @@ def train_featboost(
         LinearRegression(),
     ],
     metric="mae",
+    use_shap=True,
+    corr_check=False,
+    shap_only_first=False,
 ):
     n_features = X.shape[1] if X.shape[1] < 50 else 50
     feature_selector = FeatBoostRegressor(
@@ -216,8 +220,9 @@ def train_featboost(
         siso_order=1,
         num_resets=1,
         epsilon=1e-10,
-        use_shap=False,
-        corr_check=False,
+        use_shap=use_shap,
+        corr_check=corr_check,
+        shap_only_first=shap_only_first,
     )
     feature_selector.fit(X, y)
     return feature_selector.selected_subset_, np.array(
@@ -225,6 +230,32 @@ def train_featboost(
             1 / len(feature_selector.selected_subset_)
             for _ in range(len(feature_selector.selected_subset_))
         ]
+    )
+
+
+def train_shapboost_c(
+    X,
+    y,
+    estimators=[
+        XGBRegressor(n_estimators=100, max_depth=20, n_jobs=-1),
+        LinearRegression(),
+    ],
+    metric="mae",
+):
+    return train_shapboost(X, y, estimators, metric, use_shap=True, corr_check=True)
+
+
+def train_shapboost_refined(
+    X,
+    y,
+    estimators=[
+        XGBRegressor(n_estimators=100, max_depth=20, n_jobs=-1),
+        LinearRegression(),
+    ],
+    metric="mae",
+):
+    return train_shapboost(
+        X, y, estimators, metric, use_shap=True, shap_only_first=True
     )
 
 
@@ -238,7 +269,7 @@ def train_xgb(X, y, clf):
 
 
 def train_mrmr(X, y, clf):
-    features = mrmr_regression(X, y, K=X.shape[1])
+    features = mrmr_regression(X, y, K=X.shape[1], n_jobs=1, show_progress=False)
     return features, np.array([1 / X.shape[1] for _ in range(X.shape[1])])
 
 
@@ -281,3 +312,36 @@ def run_eval_survival(X_train, X_val, y_train, y_val, all_features, clf):
         )
         cindex_per_added_feature.append(cindex)
     return cindex_per_added_feature
+
+
+class RandomSurvivalForestWrapper:
+    def __init__(self, **args):
+        self.clf = RandomSurvivalForest(**args)
+
+    def fit(self, X, y, **args):
+        df = pd.DataFrame(X, columns=[i for i in range(0, X.shape[1])])
+        df["time"] = y[:, 0]
+        df["event"] = (y[:, 0] == y[:, 1]).astype(bool)
+        y = df[["event", "time"]].to_records(index=False)
+        self.clf.fit(X, y, **args)
+
+    def predict(self, X):
+        return self.clf.predict(X) * -1
+
+
+class CoxPHWrapper:
+    def __init__(self, **args):
+        self.clf = CoxPHFitter(**args)
+
+    def fit(self, X, y, **args):
+        df = pd.DataFrame(X, columns=[i for i in range(0, X.shape[1])])
+        df["time"] = y[:, 0]
+        df["event"] = (y[:, 0] == y[:, 1]).astype(bool)
+        self.clf.fit(
+            df[["time", "event"] + [i for i in range(0, X.shape[1])]],
+            duration_col="time",
+            event_col="event",
+        )
+
+    def predict(self, X):
+        return self.clf.predict_median(X)

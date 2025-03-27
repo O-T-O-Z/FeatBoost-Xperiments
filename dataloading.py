@@ -4,6 +4,12 @@ from pycox.datasets import metabric
 from shap.datasets import nhanesi
 from sklearn.datasets import fetch_california_housing, load_diabetes
 from sklearn.preprocessing import OneHotEncoder
+from sksurv.datasets import (
+    load_aids,
+    load_breast_cancer,
+    load_veterans_lung_cancer,
+    load_whas500,
+)
 from ucimlrepo import fetch_ucirepo
 
 pd.set_option("future.no_silent_downcasting", True)
@@ -152,8 +158,12 @@ def prepare_metabric_full() -> None:
         "siah1_mut",  # highly correlated with outcome
     ]
     df = df.drop(columns=drop_columns)
-    X = df.drop(columns=["overall_survival_months", "overall_survival"])
-    X["er_status"] = X["er_status"].map({"Positive": 1, "Negative": 0}).astype(str)
+    df["er_status"] = df["er_status"].map({"Positive": 1, "Negative": 0}).astype(str)
+    for col in df.select_dtypes(include="object").columns:
+        if col.endswith("mut"):
+            # transform such that everything is 0 except if it is a string
+            df[col] = df[col].apply(lambda x: 1 if x != "0" else 0)
+            df[col] = df[col].astype(int)
 
     enc = OneHotEncoder(drop="if_binary", sparse_output=False).set_output(
         transform="pandas"
@@ -165,6 +175,7 @@ def prepare_metabric_full() -> None:
     df = pd.concat([df, enc.fit_transform(object_columns)], axis=1)
 
     y = df[["overall_survival_months", "overall_survival"]]
+    X = df.drop(columns=["overall_survival_months", "overall_survival"])
     y = y.copy()
     y["lower_bound"] = y["overall_survival_months"]
     y["upper_bound"] = y["overall_survival_months"]
@@ -212,8 +223,11 @@ def prepare_metabric_regression() -> None:
         "overall_survival",
     ]
     df = df.drop(columns=drop_columns)
-    X = df.drop(columns=["nottingham_prognostic_index"])
-    X["er_status"] = X["er_status"].map({"Positive": 1, "Negative": 0}).astype(str)
+    df["er_status"] = df["er_status"].map({"Positive": 1, "Negative": 0}).astype(str)
+    for col in df.select_dtypes(include="object").columns:
+        if col.endswith("mut"):
+            df[col] = df[col].apply(lambda x: 1 if x != "0" else 0)
+            df[col] = df[col].astype(int)
 
     enc = OneHotEncoder(drop="if_binary", sparse_output=False).set_output(
         transform="pandas"
@@ -224,6 +238,7 @@ def prepare_metabric_regression() -> None:
     df.drop(object_columns.columns, axis=1, inplace=True)
     df = pd.concat([df, enc.fit_transform(object_columns)], axis=1)
     y = df["nottingham_prognostic_index"]
+    X = df.drop(columns=["nottingham_prognostic_index"])
     df = pd.concat([X, y], axis=1)
     df.to_csv("datasets/metabric_regression_cleaned.csv", index=False)
 
@@ -294,6 +309,77 @@ def prepare_msd() -> None:
     X = data
     df = pd.concat([X, y], axis=1)
     df.sample(10000, random_state=42).to_csv("datasets/msd_cleaned.csv", index=False)
+
+
+def prepare_veterans() -> None:
+    """Prepare the Veterans dataset."""
+    X, y_raw = load_veterans_lung_cancer()
+
+    category_columns = X.drop(X.select_dtypes(exclude="category").columns, axis=1)
+    enc = OneHotEncoder(drop="if_binary", sparse_output=False).set_output(
+        transform="pandas"
+    )
+    X.drop(category_columns.columns, axis=1, inplace=True)
+    X = pd.concat([X, enc.fit_transform(category_columns)], axis=1)
+    y = pd.DataFrame(y_raw)
+    y["lower_bound"] = y["Survival_in_days"]
+    y["upper_bound"] = y["Survival_in_days"]
+    y.loc[y["Status"] == 0, "upper_bound"] = np.inf
+    y = y.drop(columns=["Survival_in_days", "Status"])
+    df = pd.concat([X, y], axis=1)
+    df.to_csv("datasets/veterans_cleaned.csv", index=False)
+
+
+def prepare_whas500() -> None:
+    """Prepare the WHAS500 dataset."""
+    X, y_raw = load_whas500()
+    for col in X.select_dtypes(include="category").columns:
+        X[col] = X[col].astype(int)
+    y = pd.DataFrame(y_raw)
+    y["lower_bound"] = y["lenfol"]
+    y["upper_bound"] = y["lenfol"]
+    y.loc[y["fstat"] == 0, "upper_bound"] = np.inf
+    y = y.drop(columns=["fstat", "lenfol"])
+    df = pd.concat([X, y], axis=1)
+    df.to_csv("datasets/whas500_cleaned.csv", index=False)
+
+
+def prepare_breast_cancer() -> None:
+    """Prepare the breast cancer dataset."""
+    X, y_raw = load_breast_cancer()
+
+    category_columns = X.drop(X.select_dtypes(exclude="category").columns, axis=1)
+    enc = OneHotEncoder(drop="if_binary", sparse_output=False).set_output(
+        transform="pandas"
+    )
+    X.drop(category_columns.columns, axis=1, inplace=True)
+    X = pd.concat([X, enc.fit_transform(category_columns)], axis=1)
+    y = pd.DataFrame(y_raw)
+    y["lower_bound"] = y["t.tdm"]
+    y["upper_bound"] = y["t.tdm"]
+    y.loc[y["e.tdm"] == 0, "upper_bound"] = np.inf
+    y = y.drop(columns=["t.tdm", "e.tdm"])
+    df = pd.concat([X, y], axis=1)
+    df.to_csv("datasets/breast_cancer_cleaned.csv", index=False)
+
+
+def prepare_aids() -> None:
+    """Prepare the AIDS dataset."""
+    X, y_raw = load_aids()
+    y = pd.DataFrame(y_raw)
+    category_columns = X.drop(X.select_dtypes(exclude="category").columns, axis=1)
+    enc = OneHotEncoder(drop="if_binary", sparse_output=False).set_output(
+        transform="pandas"
+    )
+    X.drop(category_columns.columns, axis=1, inplace=True)
+    X = pd.concat([X, enc.fit_transform(category_columns)], axis=1)
+    X.drop(["txgrp_3", "txgrp_4"], axis=1, inplace=True)
+    y["lower_bound"] = y["time"]
+    y["upper_bound"] = y["time"]
+    y.loc[y["censor"] == 1, "upper_bound"] = np.inf
+    y = y.drop(columns=["time", "censor"])
+    df = pd.concat([X, y], axis=1)
+    df.to_csv("datasets/aids_cleaned.csv", index=False)
 
 
 def load_regression_dataset(name: str) -> tuple[pd.DataFrame, pd.DataFrame]:

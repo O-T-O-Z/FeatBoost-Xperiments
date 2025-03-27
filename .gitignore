@@ -170,3 +170,7 @@ plots*
 plot_feature_selection.ipynb
 survival_results/
 regression_experiments/
+*.out
+.other/
+regression_features/*/**
+survival_features/*/**
